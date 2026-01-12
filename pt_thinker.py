@@ -1,14 +1,10 @@
 import os
 import time
 import random
-import requests
-from kucoin.client import Market
-market = Market(url='https://api.kucoin.com')
 import sys
 import datetime
 import traceback
 import linecache
-import base64
 import calendar
 import hashlib
 import hmac
@@ -18,102 +14,51 @@ import logging
 import json
 import uuid
 
-from nacl.signing import SigningKey
+from broker_ccxt_phemex import CCXTPhemexBroker, normalize_symbol
 
-# -----------------------------
-# Robinhood market-data (current ASK), same source as rhcb.py trader:
-#   GET /api/v1/crypto/marketdata/best_bid_ask/?symbol=BTC-USD
-#   use result["ask_inclusive_of_buy_spread"]
-# -----------------------------
-ROBINHOOD_BASE_URL = "https://trading.robinhood.com"
-
-_RH_MD = None  # lazy-init so import doesn't explode if creds missing
+_BROKER = None
 
 
-class RobinhoodMarketData:
-    def __init__(self, api_key: str, base64_private_key: str, base_url: str = ROBINHOOD_BASE_URL, timeout: int = 10):
-        self.api_key = (api_key or "").strip()
-        self.base_url = (base_url or "").rstrip("/")
-        self.timeout = timeout
-
-        if not self.api_key:
-            raise RuntimeError("Robinhood API key is empty (r_key.txt).")
-
-        try:
-            raw_private = base64.b64decode((base64_private_key or "").strip())
-            self.private_key = SigningKey(raw_private)
-        except Exception as e:
-            raise RuntimeError(f"Failed to decode Robinhood private key (r_secret.txt): {e}")
-
-        self.session = requests.Session()
-
-    def _get_current_timestamp(self) -> int:
-        return int(time.time())
-
-    def _get_authorization_header(self, method: str, path: str, body: str, timestamp: int) -> dict:
-        # matches the trader's signing format
-        method = method.upper()
-        body = body or ""
-        message_to_sign = f"{self.api_key}{timestamp}{path}{method}{body}"
-        signed = self.private_key.sign(message_to_sign.encode("utf-8"))
-        signature_b64 = base64.b64encode(signed.signature).decode("utf-8")
-
-        return {
-            "x-api-key": self.api_key,
-            "x-timestamp": str(timestamp),
-            "x-signature": signature_b64,
-            "Content-Type": "application/json",
-        }
-
-    def make_api_request(self, method: str, path: str, body: str = "") -> dict:
-        url = f"{self.base_url}{path}"
-        ts = self._get_current_timestamp()
-        headers = self._get_authorization_header(method, path, body, ts)
-
-        resp = self.session.request(method=method.upper(), url=url, headers=headers, data=body or None, timeout=self.timeout)
-        if resp.status_code >= 400:
-            raise RuntimeError(f"Robinhood HTTP {resp.status_code}: {resp.text}")
-        return resp.json()
-
-    def get_current_ask(self, symbol: str) -> float:
-        symbol = (symbol or "").strip().upper()
-        path = f"/api/v1/crypto/marketdata/best_bid_ask/?symbol={symbol}"
-        data = self.make_api_request("GET", path)
-
-        if not data or "results" not in data or not data["results"]:
-            raise RuntimeError(f"Robinhood best_bid_ask returned no results for {symbol}: {data}")
-
-        result = data["results"][0]
-        # EXACTLY like rhcb.py's get_price(): ask_inclusive_of_buy_spread
-        return float(result["ask_inclusive_of_buy_spread"])
-
-
-def robinhood_current_ask(symbol: str) -> float:
-    """
-    Returns Robinhood current BUY price (ask_inclusive_of_buy_spread) for symbols like 'BTC-USD'.
-    Reads creds from r_key.txt and r_secret.txt in the same folder as this script.
-    """
-    global _RH_MD
-    if _RH_MD is None:
+def _get_broker() -> CCXTPhemexBroker:
+    global _BROKER
+    if _BROKER is None:
         base_dir = os.path.dirname(os.path.abspath(__file__))
-        key_path = os.path.join(base_dir, "r_key.txt")
-        secret_path = os.path.join(base_dir, "r_secret.txt")
+        key_path = os.path.join(base_dir, "ccxt_key.txt")
+        secret_path = os.path.join(base_dir, "ccxt_secret.txt")
+        api_key = ""
+        api_secret = ""
+        try:
+            if os.path.isfile(key_path):
+                with open(key_path, "r", encoding="utf-8") as f:
+                    api_key = (f.read() or "").strip()
+            if os.path.isfile(secret_path):
+                with open(secret_path, "r", encoding="utf-8") as f:
+                    api_secret = (f.read() or "").strip()
+        except Exception:
+            api_key = ""
+            api_secret = ""
+        _BROKER = CCXTPhemexBroker(api_key=api_key, secret=api_secret)
+    return _BROKER
 
-        if not os.path.isfile(key_path) or not os.path.isfile(secret_path):
-            raise RuntimeError(
-                "Missing r_key.txt and/or r_secret.txt next to pt_thinker.py. "
-                "Run pt_trader.py once to create them (and to set your Robinhood API key)."
-            )
+
+def _fetch_kline_string(symbol: str, timeframe: str, limit: int = 200) -> str:
+    broker = _get_broker()
+    candles = broker.get_ohlcv(symbol, timeframe, limit, quote="USDT")
+    rows = []
+    for c in candles:
+        rows.append([c["ts"], c["open"], c["close"], c["high"], c["low"], c["volume"]])
+    return str(rows).replace("]]", "], ").replace("[[", "[")
 
 
-        with open(key_path, "r", encoding="utf-8") as f:
-            api_key = f.read()
-        with open(secret_path, "r", encoding="utf-8") as f:
-            priv_b64 = f.read()
-
-        _RH_MD = RobinhoodMarketData(api_key=api_key, base64_private_key=priv_b64)
-
-    return _RH_MD.get_current_ask(symbol)
+def ccxt_current_ask(symbol: str) -> float:
+    broker = _get_broker()
+    bid, ask = broker.get_best_bid_ask(symbol, quote="USDT")
+    if ask is not None and ask > 0:
+        return float(ask)
+    last = broker.get_last_price(symbol, quote="USDT")
+    if last is not None and last > 0:
+        return float(last)
+    raise RuntimeError(f"No ask/last price for {normalize_symbol(symbol)}")
 
 
 def restart_program():
@@ -396,10 +341,10 @@ def init_coin(sym: str):
 	while True:
 		history_list = []
 		while True:
-			try:
-				history = str(market.get_kline(coin, tf_choices[ind])).replace(']]', '], ').replace('[[', '[')
-				break
-			except Exception as e:
+				try:
+					history = _fetch_kline_string(coin, tf_choices[ind])
+					break
+				except Exception as e:
 				time.sleep(3.5)
 				if 'Requests' in str(e):
 					pass
@@ -553,7 +498,7 @@ def step_coin(sym: str):
 		history_list = []
 		while True:
 			try:
-				history = str(market.get_kline(coin, tf_choices[tf_choice_index])).replace(']]', '], ').replace('[[', '[')
+			history = _fetch_kline_string(coin, tf_choices[tf_choice_index])
 				break
 			except Exception as e:
 				time.sleep(3.5)
@@ -563,7 +508,7 @@ def step_coin(sym: str):
 					pass
 				continue
 		history_list = history.split("], [")
-		# KuCoin can occasionally return an empty/short kline response.
+		# CCXT can occasionally return an empty/short kline response.
 		# Guard against history_list[1] raising IndexError.
 		if len(history_list) < 2:
 			time.sleep(0.2)
@@ -730,11 +675,11 @@ def step_coin(sym: str):
 		# reset tf_update for this coin (but DO NOT block-wait; just detect updates and return)
 		tf_update = ['no'] * len(tf_choices)
 
-		# get current price ONCE per coin — use Robinhood's current ASK (same as rhcb trader buy price)
+		# get current price ONCE per coin — use CCXT Phemex ask
 		rh_symbol = f"{sym}-USD"
 		while True:
 			try:
-				current = robinhood_current_ask(rh_symbol)
+				current = ccxt_current_ask(rh_symbol)
 				break
 			except Exception as e:
 				print(e)
@@ -781,7 +726,7 @@ def step_coin(sym: str):
 			while True:
 
 				try:
-					history = str(market.get_kline(coin, tf_choices[inder])).replace(']]', '], ').replace('[[', '[')
+					history = _fetch_kline_string(coin, tf_choices[inder])
 					break
 				except Exception as e:
 					time.sleep(3.5)
@@ -1039,7 +984,7 @@ def step_coin(sym: str):
 		while this_index_now < len(tf_update):
 			while True:
 				try:
-					history = str(market.get_kline(coin, tf_choices[this_index_now])).replace(']]', '], ').replace('[[', '[')
+					history = _fetch_kline_string(coin, tf_choices[this_index_now])
 					break
 				except Exception as e:
 					time.sleep(3.5)

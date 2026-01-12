@@ -1,6 +1,5 @@
-from kucoin.client import Market
-market = Market(url='https://api.kucoin.com')
 import time
+import os
 """
 <------------
 newest oldest
@@ -58,6 +57,41 @@ starting_amount4_4 = 100.0
 profit_list = []
 profit_list1 = []
 profit_list1_2 = []
+
+from broker_ccxt_phemex import CCXTPhemexBroker
+
+_BROKER = None
+
+
+def _get_broker() -> CCXTPhemexBroker:
+    global _BROKER
+    if _BROKER is None:
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        key_path = os.path.join(base_dir, "ccxt_key.txt")
+        secret_path = os.path.join(base_dir, "ccxt_secret.txt")
+        api_key = ""
+        api_secret = ""
+        try:
+            if os.path.isfile(key_path):
+                with open(key_path, "r", encoding="utf-8") as f:
+                    api_key = (f.read() or "").strip()
+            if os.path.isfile(secret_path):
+                with open(secret_path, "r", encoding="utf-8") as f:
+                    api_secret = (f.read() or "").strip()
+        except Exception:
+            api_key = ""
+            api_secret = ""
+        _BROKER = CCXTPhemexBroker(api_key=api_key, secret=api_secret)
+    return _BROKER
+
+
+def _fetch_kline_entries(symbol: str, timeframe: str, limit: int = 1500) -> list:
+    broker = _get_broker()
+    candles = broker.get_ohlcv(symbol, timeframe, limit, quote="USDT")
+    entries = []
+    for c in candles:
+        entries.append(f"[{c['ts']}, {c['open']}, {c['close']}, {c['high']}, {c['low']}, {c['volume']}]")
+    return entries
 profit_list1_3 = []
 profit_list1_4 = []
 profit_list2 = []
@@ -409,12 +443,16 @@ while True:
 	last_perc_comp = perc_comp+'kjfjakjdakd'
 	while True:
 		time.sleep(.5)
-		try:
-			history = str(market.get_kline(coin_choice,timeframe,startAt=end_time,endAt=start_time)).replace(']]','], ').replace('[[','[').split('], [')
-		except Exception as e:
-			PrintException()
-			time.sleep(3.5)
-			continue
+			try:
+				history = _fetch_kline_entries(coin_choice, timeframe, limit=1500)
+			except Exception:
+				PrintException()
+				time.sleep(3.5)
+				continue
+			if not history:
+				PrintException()
+				time.sleep(3.5)
+				continue
 		index = 0
 		while True:
 			history_list.append(history[index])
@@ -496,8 +534,10 @@ while True:
 		price_list.reverse()
 		high_price_list.reverse()
 		low_price_list.reverse()
-		ticker_data = str(market.get_ticker(coin_choice)).replace('"','').replace("'","").replace("[","").replace("{","").replace("]","").replace("}","").replace(",","").lower().split(' ')
-		price = float(ticker_data[ticker_data.index('price:')+1])
+			broker = _get_broker()
+			price = broker.get_last_price(coin_choice, quote="USDT")
+			if price is None:
+				raise RuntimeError("Missing last price")
 	except:
 		PrintException()
 	history_list = []

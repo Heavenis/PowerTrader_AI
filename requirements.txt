@@ -4,4 +4,4 @@ matplotlib
 colorama
 cryptography
 PyNaCl
-kucoin-python
+ccxt
