@@ -88,6 +88,14 @@ def _get_broker() -> CCXTPhemexBroker:
 
 def _fetch_kline_entries(symbol: str, timeframe: str, limit: int = 1500) -> list:
     broker = _get_broker()
+    try:
+        limit = int(limit)
+    except Exception:
+        limit = 0
+    if limit <= 0:
+        if PT_DEBUG:
+            print(f"[PT_DEBUG] Trainer limit invalid ({limit}); using default 1500.")
+        limit = 1500
     candles = broker.get_ohlcv(symbol, timeframe, limit, quote="USDT")
     if PT_DEBUG:
         first_ts = candles[0]["ts"] if candles else None

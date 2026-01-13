@@ -610,7 +610,12 @@ class CandleFetcher:
           [{"ts": int, "open": float, "high": float, "low": float, "close": float}, ...]
         """
         symbol = symbol.upper().strip()
-        limit = int(limit or 0)
+        try:
+            limit = int(limit)
+        except Exception:
+            limit = 0
+        if limit <= 0:
+            limit = 120
 
         now = time.time()
         cache_key = (symbol, timeframe, limit)

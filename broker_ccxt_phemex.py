@@ -168,15 +168,17 @@ class CCXTPhemexBroker:
         tf = map_timeframe(timeframe)
         self._ensure_markets()
         try:
-            limit_int = int(limit or 0) if limit else 200
+            limit_int = int(limit)
         except Exception:
+            limit_int = 0
+        if limit_int <= 0:
             limit_int = 200
         try:
             rows = self.exchange.fetch_ohlcv(symbol, timeframe=tf, limit=limit_int)
         except Exception as exc:
             self._log_rate_limited(
                 f"ohlcv-error:{symbol}:{tf}",
-                f"Failed to fetch OHLCV for {symbol} ({tf}): {exc}",
+                f"Failed to fetch OHLCV for {symbol} ({tf}) limit={limit_int}: {exc}",
             )
             return []
 
