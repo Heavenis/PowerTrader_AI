@@ -23,6 +23,8 @@ from matplotlib.transforms import blended_transform_factory
 
 from broker_ccxt_phemex import CCXTPhemexBroker
 
+PT_DEBUG = os.environ.get("PT_DEBUG") == "1"
+
 DARK_BG = "#070B10"
 DARK_BG2 = "#0B1220"
 DARK_PANEL = "#0E1626"
@@ -602,7 +604,7 @@ class CandleFetcher:
         self._cache_ttl_seconds: float = 10.0
 
 
-    def get_klines(self, symbol: str, timeframe: str, limit: int = 120) -> List[dict]:
+    def get_candles(self, symbol: str, timeframe: str, limit: int = 120) -> List[dict]:
         """
         Returns candles oldest->newest as:
           [{"ts": int, "open": float, "high": float, "low": float, "close": float}, ...]
@@ -798,7 +800,14 @@ class CandleChart(ttk.Frame):
         tf = self.timeframe_var.get().strip()
         limit = int(cfg.get("candles_limit", 120))
 
-        candles = self.fetcher.get_klines(self.coin, tf, limit=limit)
+        candles = self.fetcher.get_candles(self.coin, tf, limit=limit)
+        if PT_DEBUG:
+            first_ts = candles[0]["ts"] if candles else None
+            last_ts = candles[-1]["ts"] if candles else None
+            print(
+                f"[PT_DEBUG] Chart refresh coin={self.coin} tf={tf} limit={limit} "
+                f"candles={len(candles)} first_ts={first_ts} last_ts={last_ts}"
+            )
 
         folder = coin_folders.get(self.coin, "")
         low_path = os.path.join(folder, "low_bound_prices.html")
@@ -1591,9 +1600,9 @@ class PowerTraderHub(tk.Tk):
         self.trainers: Dict[str, LogProc] = {}
 
         self.fetcher = CandleFetcher()
-
-
-        self.fetcher = CandleFetcher()
+        if PT_DEBUG:
+            print(f"[PT_DEBUG] Hub file: {__file__}")
+            print(f"[PT_DEBUG] CandleFetcher: {self.fetcher.__class__.__name__}")
 
         self._build_menu()
         self._build_layout()
