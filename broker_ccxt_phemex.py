@@ -169,10 +169,12 @@ class CCXTPhemexBroker:
         self._ensure_markets()
         try:
             limit_int = int(limit)
+            if limit_int > 100:
+                limit_int = 100
         except Exception:
             limit_int = 0
         if limit_int <= 0:
-            limit_int = 200
+            limit_int = 100
         try:
             rows = self.exchange.fetch_ohlcv(symbol, timeframe=tf, limit=limit_int)
         except Exception as exc:
